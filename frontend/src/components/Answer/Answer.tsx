@@ -1,8 +1,8 @@
-import { FormEvent, useContext, useEffect, useMemo, useState } from 'react'
+import { FormEvent, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { nord } from 'react-syntax-highlighter/dist/esm/styles/prism'
-import { Checkbox, DefaultButton, Dialog, FontIcon, Stack, Text } from '@fluentui/react'
+import { Checkbox, DefaultButton, Dialog, FontIcon, Stack, Text, TextField } from '@fluentui/react'
 import { useBoolean } from '@fluentui/react-hooks'
 import { ThumbDislike20Filled, ThumbLike20Filled } from '@fluentui/react-icons'
 import DOMPurify from 'dompurify'
@@ -40,6 +40,7 @@ export const Answer = ({ answer, onCitationClicked, onExectResultClicked }: Prop
   const [isFeedbackDialogOpen, setIsFeedbackDialogOpen] = useState(false)
   const [showReportInappropriateFeedback, setShowReportInappropriateFeedback] = useState(false)
   const [negativeFeedbackList, setNegativeFeedbackList] = useState<Feedback[]>([])
+  const [textFeedback, setTextFeedback] = useState<string>()
   const appStateContext = useContext(AppStateContext)
   const FEEDBACK_ENABLED =
     appStateContext?.state.frontendSettings?.feedback_enabled && appStateContext?.state.isCosmosDBAvailable?.cosmosDB
@@ -141,7 +142,7 @@ export const Answer = ({ answer, onCitationClicked, onExectResultClicked }: Prop
 
   const onSubmitNegativeFeedback = async () => {
     if (answer.message_id == undefined) return
-    await historyMessageFeedback(answer.message_id, negativeFeedbackList.join(','))
+    await historyMessageFeedback(answer.message_id, [textFeedback, ...negativeFeedbackList].filter(Boolean).join(','))
     resetFeedbackDialog()
   }
 
@@ -149,45 +150,32 @@ export const Answer = ({ answer, onCitationClicked, onExectResultClicked }: Prop
     setIsFeedbackDialogOpen(false)
     setShowReportInappropriateFeedback(false)
     setNegativeFeedbackList([])
+    setTextFeedback('')
   }
 
-  const UnhelpfulFeedbackContent = () => {
+  const UnhelpfulFeedbackContent = useCallback(() => {
+    const handleTextChange = (e: React.FormEvent<HTMLInputElement | HTMLTextAreaElement>, newValue?: string) => {
+      setTextFeedback(newValue)
+    }
+
     return (
       <>
         <div>Why wasn't this response helpful?</div>
-        <Stack tokens={{ childrenGap: 4 }}>
-          <Checkbox
-            label="Citations are missing"
-            id={Feedback.MissingCitation}
-            defaultChecked={negativeFeedbackList.includes(Feedback.MissingCitation)}
-            onChange={updateFeedbackList}></Checkbox>
-          <Checkbox
-            label="Citations are wrong"
-            id={Feedback.WrongCitation}
-            defaultChecked={negativeFeedbackList.includes(Feedback.WrongCitation)}
-            onChange={updateFeedbackList}></Checkbox>
-          <Checkbox
-            label="The response is not from my data"
-            id={Feedback.OutOfScope}
-            defaultChecked={negativeFeedbackList.includes(Feedback.OutOfScope)}
-            onChange={updateFeedbackList}></Checkbox>
-          <Checkbox
-            label="Inaccurate or irrelevant"
-            id={Feedback.InaccurateOrIrrelevant}
-            defaultChecked={negativeFeedbackList.includes(Feedback.InaccurateOrIrrelevant)}
-            onChange={updateFeedbackList}></Checkbox>
-          <Checkbox
-            label="Other"
-            id={Feedback.OtherUnhelpful}
-            defaultChecked={negativeFeedbackList.includes(Feedback.OtherUnhelpful)}
-            onChange={updateFeedbackList}></Checkbox>
-        </Stack>
+
+        <TextField
+          placeholder="Please provide more details..."
+          multiline
+          rows={3}
+          value={textFeedback}
+          onChange={handleTextChange}
+        />
+
         <div onClick={() => setShowReportInappropriateFeedback(true)} style={{ color: '#115EA3', cursor: 'pointer' }}>
           Report inappropriate content
         </div>
       </>
     )
-  }
+  }, [])
 
   const ReportInappropriateFeedbackContent = () => {
     return (
@@ -226,8 +214,16 @@ export const Answer = ({ answer, onCitationClicked, onExectResultClicked }: Prop
     )
   }
 
+  const isSubmitDisabled = () => {
+    if (showReportInappropriateFeedback) {
+      return negativeFeedbackList.length < 1
+    } else {
+      return !textFeedback || textFeedback.trim() === ''
+    }
+  }
+
   const components = {
-    code({ node, ...props }: { node: any;[key: string]: any }) {
+    code({ node, ...props }: { node: any; [key: string]: any }) {
       let language
       if (props.className) {
         const match = props.className.match(/language-(\w+)/)
@@ -247,17 +243,22 @@ export const Answer = ({ answer, onCitationClicked, onExectResultClicked }: Prop
         <Stack.Item>
           <Stack horizontal grow>
             <Stack.Item grow>
-              {parsedAnswer && <ReactMarkdown
-                linkTarget="_blank"
-                remarkPlugins={[remarkGfm, supersub]}
-                children={
-                  SANITIZE_ANSWER
-                    ? DOMPurify.sanitize(parsedAnswer?.markdownFormatText, { ALLOWED_TAGS: XSSAllowTags, ALLOWED_ATTR: XSSAllowAttributes })
-                    : parsedAnswer?.markdownFormatText
-                }
-                className={styles.answerText}
-                components={components}
-              />}
+              {parsedAnswer && (
+                <ReactMarkdown
+                  linkTarget="_blank"
+                  remarkPlugins={[remarkGfm, supersub]}
+                  children={
+                    SANITIZE_ANSWER
+                      ? DOMPurify.sanitize(parsedAnswer?.markdownFormatText, {
+                          ALLOWED_TAGS: XSSAllowTags,
+                          ALLOWED_ATTR: XSSAllowAttributes
+                        })
+                      : parsedAnswer?.markdownFormatText
+                  }
+                  className={styles.answerText}
+                  components={components}
+                />
+              )}
             </Stack.Item>
             <Stack.Item className={styles.answerHeader}>
               {FEEDBACK_ENABLED && answer.message_id !== undefined && (
@@ -268,7 +269,7 @@ export const Answer = ({ answer, onCitationClicked, onExectResultClicked }: Prop
                     onClick={() => onLikeResponseClicked()}
                     style={
                       feedbackState === Feedback.Positive ||
-                        appStateContext?.state.feedbackState[answer.message_id] === Feedback.Positive
+                      appStateContext?.state.feedbackState[answer.message_id] === Feedback.Positive
                         ? { color: 'darkgreen', cursor: 'pointer' }
                         : { color: 'slategray', cursor: 'pointer' }
                     }
@@ -279,8 +280,8 @@ export const Answer = ({ answer, onCitationClicked, onExectResultClicked }: Prop
                     onClick={() => onDislikeResponseClicked()}
                     style={
                       feedbackState !== Feedback.Positive &&
-                        feedbackState !== Feedback.Neutral &&
-                        feedbackState !== undefined
+                      feedbackState !== Feedback.Neutral &&
+                      feedbackState !== undefined
                         ? { color: 'darkred', cursor: 'pointer' }
                         : { color: 'slategray', cursor: 'pointer' }
                     }
@@ -336,15 +337,9 @@ export const Answer = ({ answer, onCitationClicked, onExectResultClicked }: Prop
                     aria-label="Open Intents"
                     tabIndex={0}
                     role="button">
-                    <span>
-                      Show Intents
-                    </span>
+                    <span>Show Intents</span>
                   </Text>
-                  <FontIcon
-                    className={styles.accordionIcon}
-                    onClick={handleChevronClick}
-                    iconName={'ChevronRight'}
-                  />
+                  <FontIcon className={styles.accordionIcon} onClick={handleChevronClick} iconName={'ChevronRight'} />
                 </Stack>
               </Stack>
             </Stack.Item>
@@ -404,7 +399,7 @@ export const Answer = ({ answer, onCitationClicked, onExectResultClicked }: Prop
 
           <div>By pressing submit, your feedback will be visible to the application owner.</div>
 
-          <DefaultButton disabled={negativeFeedbackList.length < 1} onClick={onSubmitNegativeFeedback}>
+          <DefaultButton disabled={isSubmitDisabled()} onClick={onSubmitNegativeFeedback}>
             Submit
           </DefaultButton>
         </Stack>
